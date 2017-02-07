@@ -9,12 +9,21 @@ brownian() implements one dimensional Brownian motion (i.e. the Wiener process).
 # File: sensorsim.py
 
 from math import sqrt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from scipy.stats import norm
 
+import argparse
+import igrow_pb.location_pb2 as location_pb2
+import igrow_pb.observation_pb2 as observation_pb2
 import matplotlib.pyplot as plt
-import igrow_pb
 import numpy as np
+import requests
 import time
+import uuid
+
+DEFAULT_URL = 'http://localhost:9998/observations'
+
+current_time_ms = lambda: int(round(time.time() * 1000))
 
 def brownian(x0, n, dt, delta, out=None):
     """
@@ -83,55 +92,81 @@ def main(args):
     # Total time.
     T = 10.0
     # Number of steps.
-    N = 500
+    N = 20
     # Time step size
     dt = T/N
     # Number of realizations to generate.
     m = 20
     # Create an empty array to store the realizations.
-    x = numpy.empty((m,N+1))
+    x = np.empty((m,N+1))
     # Initial values of x.
     x[:, 0] = 15.0
 
     brownian(x[:,0], N, dt, delta, out=x[:,1:])
 
-    t = numpy.linspace(0.0, N*dt, N+1)
+    t = np.linspace(0.0, N*dt, N+1)
 
     fig = plt.figure()  # a new figure window
+    canvas = FigureCanvas(fig)
     ax = fig.add_subplot(1, 1, 1)  # specify (nrows, ncols, axnum)
     
     for k in range(m):
         ax.plot(t, x[k])
     ax.set_xlabel('t', fontsize=16)
     ax.set_ylabel('x', fontsize=16)
-    ax.set_grid(True)
+    ax.grid(True)
 
-    display(fig)
+    canvas.print_figure('Brownian Motion')
 
+    sensor_id = uuid.uuid4()
+    
     while True:
-        observation = observation_pb2.observations.observation.add()
-        time.sleep(3)
-        
-        
+        observations = observation_pb2.Observations()
+
+        for i in range(N):
+            observation = observations.observations.add()
+            observation.type = observation_pb2.Observation.ENVIRONMENTAL_SENSOR
+            observation.sensorId = str(sensor_id)
+            observation.timestamp = current_time_ms()
+            observation.mode = observation_pb2.Observation.ACTIVE
+            
+            observation.location.latitude = 50939970
+            observation.location.longitude = -1415058
+            observation.location.altitude = 0
+            observation.location.hdop = 0
+            observation.location.vdop = 0
+
+            observation.envSensorObservation.temperature = x[0, i]
+            observation.envSensorObservation.humidity = x[1, i]
+            observation.envSensorObservation.irradiance = x[2, i]
+
+            time.sleep(5)  # simulate the sensor sampling behaviour
+             
+        print(observations)
+        r = requests.post(DEFAULT_URL, data=observations.SerializeToString())
+        time.sleep(5)
+
+        r.raise_for_status()
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Extract property information '
-                                     ' from either the sandbox or production '
-                                     ' Trade Me API.',
+    parser = argparse.ArgumentParser(description='Simulate sensor data and write '
+                                     'to observation service.',
                                      epilog='''Example:
                                     
-$ python getprops.py --sandbox
+$ python sensorsim.py --sandbox
 ''')
 
-    parser.add_argument('--localities', action='store_true',
-                        dest='localities',
-                        help='Write Trade Me localities to a file')
+    parser.add_argument('--url', action='store',
+                        dest='url',
+                        help='Override default URL')
     parser.add_argument('--sandbox', action='store_false',
                         dest='prod',
-                        help='Use the Trademe sandbox environment rather than production')
+                        help='Use the iGrow sandbox environment rather than production')
 
     parser.add_argument('--version', action='version', version='%(prog)s 0.1')
 
-    parser.set_defaults(localities=False)
+    parser.set_defaults(url=DEFAULT_URL)
     parser.set_defaults(prod=True)
     
     args = parser.parse_args()
